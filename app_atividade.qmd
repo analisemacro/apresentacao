@@ -338,11 +338,13 @@ pesquisas = (pd.concat([pms, pmc, pim, taxas_ibc_long], keys=['PMS', 'PMC Amplia
  .assign(data = lambda x: pd.PeriodIndex(x.data, freq = "Q"))
  .query('rubrica == "PIB"')
  .drop(['rubrica', 'Número Índice', 'Número Índice S.A.'], axis = 1)
+ .rename_axis(None, axis=1)
+ .set_index("data")
  .tail(8)
  .round(2)
  .style
  .format(precision=2, thousands=".", decimal=",")
- .background_gradient(cmap='RdYlGn_r', axis=0)
+ .background_gradient(cmap='RdYlGn', axis=None)
 )
 ```
 
@@ -437,7 +439,7 @@ def pivot_componentes(dados, variacao, n = 8):
                   .round(2)
                   .style
                   .format(precision=2, thousands=".", decimal=",")
-                  .background_gradient(cmap='RdYlGn_r', axis=0)
+                  .background_gradient(cmap='RdYlGn', axis=None)
                  )
     return resultado
 
@@ -493,22 +495,24 @@ def graf_pesquisas(dados, variavel, data='2022-01-01', titulo='', caption=''):
 
 
 ```{python pesquisas_margem}
-graf_pesquisas(pesquisas, "Var. % margem", titulo = "Termômetro do varejo, serviços e índustria: variação marginal (%)", caption = foot_ibge)
+graf_pesquisas(pesquisas, "Var. % margem", data = "2023-01-01", titulo = "Termômetro do varejo, serviços e índustria: variação marginal (%)", caption = foot_ibge)
 ```
 
-# PMC, PMS, PIM-PF: Variação interanual
+## PMC, PMS, PIM-PF, IBC-br:
+### Variação interanual
 
 ```{python pesquisas_interanual}
 graf_pesquisas(pesquisas, "Var. % interanual", data = "2019-01-01", titulo = "Termômetro do varejo, serviços e índustria: variação interanual (%)", caption = foot_ibge)
 ```
 
-# PMC, PMS, PIM-PF: Variação acumulada em 12 meses
+## PMC, PMS, PIM-PF, IBC-br:
+### Variação acumulada em 12 meses
 
 ```{python pesquisas_anual}
 graf_pesquisas(pesquisas, "Var. % acumulada em 12 meses", data = "2019-01-01", titulo = "Termômetro do varejo, serviços e índustria: variação Acumulada em 12 meses", caption = foot_ibge)
 ```
 
-# Atividade Econômica por Setor
+## Atividade Econômica por Setor
 
 ```{python atividade_setor}
 
@@ -544,5 +548,3 @@ filtro['valor_base100'] = filtro.groupby('Pesquisa').apply(lambda x: (x['valor']
     )
 )
 ```
-
-##
