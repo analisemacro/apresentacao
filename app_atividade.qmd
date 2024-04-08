@@ -1,0 +1,548 @@
+---
+title: "Apresentação de Conjuntura Econômica"
+subtitle: "Nível de Atividade"
+author: 'Luiz Henrique'
+lang: pt
+format: 
+  revealjs:
+    theme: [moon, qmd/personalizacao.scss]
+    logo: "https://analisemacro.com.br/wp-content/uploads/dlm_uploads/2021/10/logo_am.png"
+    transition: fade
+    footnotes-hover: true
+    progress: true
+    slide-number: true
+    embed-resources: true
+    code-copy: true
+    code-link: true
+    link-external-newwindow: true
+    width: 1300
+    margin: 0.05
+    fig-asp: 0.618
+    fig-width: 5
+    fig-height: 3
+    fig-align: center
+    df-print: paged
+    controls: true
+execute:
+  echo: false
+  message: false
+  warning: false
+---
+
+## Introdução
+
+<br>
+
+Nesta apresentação realizamos uma breve análise do nível de atividade econômica do Brasil. 
+
+<br>
+
+Nosso foco aqui será o de demonstrar a facilidade de criar apresentações automatizadas usando o aplicativo Quarto, com o objetivo de facilitar a apresentação de diferentes temas relativos à análise econômica.
+
+## Introdução
+
+<br>
+
+Aqui apresentamos os principais indicadores de atividade econômica para compreender o cenário interno do país. Deve ficar claro para o leitor que poderá utilizar a abordagem e as ferramentas deste documento para apresentação de diferentes temas, seja eles relacionados ou não com a área de economia. 
+
+<br>
+
+Realizamos uma breve análise dos seguintes indicadores: PIB e seus componentes; PMS; PMC Ampliado; PIM-PF (Ind. Geral) e IBC-br, em suas diferentes medidas (taxas de variação). Apresentamos os resultados em gráficos e tabelas.
+
+```{python pacotes}
+import sidrapy as sidra
+from bcb import sgs
+import pandas as pd
+import numpy as np
+from plotnine import *
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+```
+
+```{python utils}
+## Funções e objetos úteis 
+# Cores para gráficos
+colors = {'blue': '#282f6b',
+          'yellow': '#eace3f',
+          'red'   : "#b22200",
+          'green': '#224f20',
+          'purple' : "#5f487c",
+          'gray': '#666666',
+          'orange' : '#b35c1e',
+          'turquoise' : "#419391",
+          'green_two' : "#839c56"
+          }
+
+# Fonte para gráficos e tabelas
+foot_ibge = "Fonte: analisemacro.com.br com dados do Sidra/IBGE."
+```
+
+```{python coleta}
+## Coleta dos dados
+# PIB e seus componentes
+dados_pib_brutos = list(
+    map(
+        # função com 2 argumentos que será repetida
+        lambda tabela, variavel: ( # lambda argumento1, argumento2: função/expressão a ser executada
+            sidra.get_table(
+                table_code = tabela,
+                territorial_level = "1", # alguns argumentos recebem valores padrão
+                ibge_territorial_code = "all",
+                variable = variavel,
+                classifications = { # PIB preços mercado e componentes (óticas)
+                    "11255": "90687,90691,90696,90707,93404,93405,93406,93407,93408"
+                    },
+                period = "all"
+                )
+            ),
+
+        # códigos das tabelas (pro argumento tabela)
+        ["1620", "1621"],
+
+        # códigos da variável dentro da tabela (pro argumento variavel)
+        ["583", "584"]
+        )
+    ) # lista de DataFrame
+
+# PMC ampliado
+pmc_brutos = sidra.get_table(
+                table_code = 8881,
+                territorial_level = "1", # alguns argumentos recebem valores padrão
+                ibge_territorial_code = "all",
+                variable = '7170,11708,11709,11711',
+                classifications = {"11046" : "56736"},
+                period = "all",
+                header = 'n'
+                )
+
+# PMS
+pms_brutos = sidra.get_table(
+                table_code = 5906,
+                territorial_level = "1", # alguns argumentos recebem valores padrão
+                ibge_territorial_code = "all",
+                variable = '7168,11623,11624,11626',
+                period = "all",
+                classifications = {"11046" : "56726"},
+                header = 'n'
+                )
+
+# PIM-PF
+pim_brutos = sidra.get_table(
+                table_code = 8888,
+                territorial_level = "1", # alguns argumentos recebem valores padrão
+                ibge_territorial_code = "all",
+                variable = '11601,11602,11604, 12607',
+                period = "all",
+                classifications = {"544" : "129314"},
+                header = 'n'
+                )
+
+# IBC-Br
+ibc_brutos = sgs.get({"ibc" : 24363, "ibc_sa" : 24364}, start = "2003-01-27")
+```
+
+
+```{python tratamento_pib}
+### Tratamento de dados do PIB
+dados_pib = (
+    pd.concat(  # empilha em uma tabela todos os DataFrames
+        objs = dados_pib_brutos,
+        keys = ["num_indice", "num_indice_sa", "precos_correntes",
+                "precos_constantes", "precos_constantes_sa"],
+        names = ["tabela", "linha"]
+        )
+    .reset_index()
+    .rename(columns = dados_pib_brutos[0].iloc[0])
+    # filtra na coluna Trimestre tudo que não for igual a "Trimestre" (cabeçalho)
+    .query("Trimestre not in 'Trimestre'")
+    .rename(
+        columns = {
+            "Trimestre (Código)": "data",
+            "Setores e subsetores": "rubrica",
+            "Valor": "valor"
+            }
+            )
+    .filter(items = ["tabela", "data", "rubrica", "valor"], axis = "columns")
+    .replace( # recodifica valores da coluna rubrica
+        to_replace = {
+            "rubrica": {
+                "Agropecuária - total": "Agropecuária",
+                "Indústria - total": "Indústria",
+                "Serviços - total": "Serviços",
+                "PIB a preços de mercado": "PIB",
+                "Despesa de consumo das famílias": "Consumo das Famílias",
+                "Despesa de consumo da administração pública": "Despesa do Governo",
+                "Formação bruta de capital fixo": "FBFC",
+                "Exportação de bens e serviços": "Exportação",
+                "Importação de bens e serviços (-)": "Importação"
+                }
+                }
+             )
+    .assign(  # substitui o 5º caracter da coluna data por "-Q" e converte em YYYY-MM-DD
+        data = lambda x: pd.to_datetime(
+            x.data.str.slice_replace(start = 4, stop = 5, repl = "-Q")
+            ),
+        valor = lambda x: x.valor.astype(float) # converte de texto para numérico
+        )
+    )
+
+# Calculando taxas de variação
+## Realiza a manipulação dos dados
+taxas_pib = (
+    dados_pib.query("tabela in ['num_indice', 'num_indice_sa']")
+    .pivot(index = ["data", "rubrica"], columns = "tabela", values = "valor")
+    .reset_index()
+    .sort_values("data") # ordena ascedentemente pela coluna data
+    )
+
+# Utiliza o método assign para criar novas colunas no DataFrame taxas_pib
+taxas_pib = (
+    taxas_pib.assign(
+        # Calcula a Variação Marginal por grupo (rubrica), usando pct_change(1) para calcular a variação percentual em relação ao período anterior
+        var_margem=lambda x: x.groupby("rubrica", group_keys=False)["num_indice_sa"]
+                              .apply(lambda y: y.pct_change(1) * 100),
+        
+        # Calcula a Variação Interanual por grupo (rubrica), usando pct_change(4) para calcular a variação percentual em relação ao mesmo período do ano anterior
+        var_interanual=lambda x: x.groupby("rubrica", group_keys=False)["num_indice"]
+                                  .apply(lambda y: y.pct_change(4) * 100),
+        
+        # Calcula a Variação Anual por grupo (rubrica), usando rolling(4) para calcular a soma móvel de 4 períodos e calcular a variação percentual em relação ao mesmo período do ano anterior
+        var_anual=lambda x: x.groupby("rubrica", group_keys=False)["num_indice"]
+                             .apply(lambda y: (y.rolling(4).sum() / y.rolling(4).sum().shift(4) - 1) * 100),
+    )
+)
+
+# Renomeando as colunas
+taxas_pib = taxas_pib.rename(columns = {
+        "var_margem": "Var. % margem",
+        "var_interanual": "Var. % interanual",
+         "var_anual": "Var. % anual",
+         "num_indice" : "Número Índice",
+         "num_indice_sa" : "Número Índice S.A."
+         }
+      )
+```
+
+
+```{python tratamento_pesquisas}
+# Tratamento das pesquisas
+# Realiza o tratamento da PMC
+pmc =  (
+  pmc_brutos
+  .loc[1:,['V', 'D2C', 'D3N']]
+  .rename(columns = {'V': 'valor',
+                     'D2C': 'data',
+                     'D3N': 'variable'})
+  .query('valor not in "..."') # filtra para somente valores numéricos
+    .assign(
+        data = lambda x: pd.to_datetime(x['data'], format = "%Y%m"), # passa para datetime
+        valor = lambda x: x.valor.astype(float) # converte de texto para numérico
+    )
+    .replace( # recodifica valores da coluna rubrica
+        to_replace = {
+            "variable": {
+              "PMC - Variação mês/mês imediatamente anterior, com ajuste sazonal (M/M-1)": "Var. % margem",
+              "PMC - Variação mês/mesmo mês do ano anterior (M/M-12)": "Var. % interanual",
+              "PMC - Variação acumulada em 12 meses (em relação ao período anterior de 12 meses)": "Var. % acumulada em 12 meses",
+              "PMC - Número-índice com ajuste sazonal (2022=100)" : "Número Índice S.A."
+            }
+           }
+        )
+       )
+       
+# Realiza o tratamento da PMS       
+pms =  (
+  pms_brutos
+  .loc[1:,['V', 'D2C', 'D3N']]
+  .rename(columns = {'V': 'valor',
+                     'D2C': 'data',
+                     'D3N': 'variable'})
+  .query('valor not in "..."') # filtra para somente valores numéricos
+    .assign(
+        data = lambda x: pd.to_datetime(x['data'], format = "%Y%m"), # passa para datetime
+        valor = lambda x: x.valor.astype(float) # converte de texto para numérico
+    )
+    .replace( # recodifica valores da coluna rubrica
+        to_replace = {
+            "variable": {
+              "PMS - Variação mês/mês imediatamente anterior, com ajuste sazonal (M/M-1)": "Var. % margem",
+              "PMS - Variação mês/mesmo mês do ano anterior (M/M-12)": "Var. % interanual",
+              "PMS - Variação acumulada em 12 meses (em relação ao período anterior de 12 meses)": "Var. % acumulada em 12 meses",
+              "PMS - Número-índice com ajuste sazonal (2022=100)" : "Número Índice S.A."
+            }
+           }
+        )
+       )
+  
+       
+# Realiza o tratamento da PIM-PF (ind. geral)
+pim = (
+  pim_brutos
+  .loc[1:,['V', 'D2C', 'D3N']]
+  .rename(columns = {'V': 'valor',
+                     'D2C': 'data',
+                     'D3N': 'variable'})
+  .query('valor not in "..."') # filtra para somente valores numéricos
+    .assign(
+        data = lambda x: pd.to_datetime(x['data'], format = "%Y%m"), # passa para datetime
+        valor = lambda x: x.valor.astype(float) # converte de texto para numérico
+    )
+    .replace( # recodifica valores da coluna rubrica
+        to_replace = {
+            "variable": {
+              "PIMPF - Variação mês/mês imediatamente anterior, com ajuste sazonal (M/M-1)": "Var. % margem",
+              "PIMPF - Variação mês/mesmo mês do ano anterior (M/M-12)": "Var. % interanual",
+              "PIMPF - Variação acumulada em 12 meses (em relação ao período anterior de 12 meses)": "Var. % acumulada em 12 meses",
+              "PIMPF - Número-índice com ajuste sazonal (2022=100)" : "Número Índice S.A."
+            }
+           }
+        )
+       )
+```
+
+
+```{python ibc}
+
+# Realiza o tratamento dos dados do IBC-br
+taxas_ibc = (
+        ibc_brutos
+        .reset_index()
+        .assign(
+        # Calcula as variações
+        var_margem =lambda x: x["ibc_sa"].pct_change(1) * 100,
+        var_interanual=lambda x: x["ibc"].pct_change(4) * 100,
+        var_anual=lambda x: (x["ibc"].rolling(4).sum() / x['ibc'].rolling(4).sum().shift(4) - 1) * 100
+       )
+       .drop('ibc', axis = 1)
+       )
+
+# Renomeia as colunas
+taxas_ibc.columns = ['data', "Número Índice S.A.", "Var. % margem", "Var. % interanual", "Var. % acumulada em 12 meses"]
+
+# Transforma dados do IBC-br em long
+taxas_ibc_long = taxas_ibc.melt(id_vars = 'data', value_name = 'valor')
+
+# Junta as pesquisas
+pesquisas = (pd.concat([pms, pmc, pim, taxas_ibc_long], keys=['PMS', 'PMC Ampliado', 'PIM-PF (Ind. Geral)', 'IBC-br'], names=['Pesquisa'])
+              .reset_index()
+              .drop('level_1', axis = 1)
+              )
+```
+
+
+## Resumo dos dados do PIB
+
+```{python tbl_pib}
+# Cria tabela com últimos 8 valores
+(taxas_pib
+ .assign(data = lambda x: pd.PeriodIndex(x.data, freq = "Q"))
+ .query('rubrica == "PIB"')
+ .drop(['rubrica', 'Número Índice', 'Número Índice S.A.'], axis = 1)
+ .tail(8)
+ .round(2)
+ .style
+ .format(precision=2, thousands=".", decimal=",")
+ .background_gradient(cmap='RdYlGn_r', axis=0)
+)
+```
+
+## Número Índice
+
+```{python grafico_numind_pib}
+# Realiza tratamento para criar o gráfico
+num_ind_pib = (
+    taxas_pib.query("rubrica == 'PIB'")
+    .filter(
+        items = ["data", "Número Índice S.A."],
+        axis = "columns"
+        )
+        .reset_index(drop = True)
+   )
+   
+# Cria novas colunas auxiliares para o exercício
+num_ind_pib["ln_pib"] = np.log(num_ind_pib["Número Índice S.A."])  # Transformação logarítmica do PIB
+num_ind_pib["tempo"] = num_ind_pib.index + 1        # Vetor de 1 até T indicando ordenação tempora das observações
+   
+# Regressão linear do PIB contra o tempo
+reg1 = smf.ols(
+    formula = "ln_pib ~ tempo",  # especificação do modelo no formato de fórmula
+    data = num_ind_pib  # fonte dos dados
+    ).fit() # estima o modelo
+
+# Salva a tendência estimada
+num_ind_pib['Tendência Linear'] = np.exp(reg1.predict()) # extrai os valores estimados e reverte a transformação logarítmica
+
+# Cria o gráfico do número índice do PIB
+(
+    ggplot(num_ind_pib, aes(x='data')) +
+    geom_line(aes(y='Número Índice S.A.'), color = "#282f6b", size=0.8) +
+    geom_line(aes(y='Tendência Linear'), color = "#b22200", size=0.8) +
+    scale_x_date(date_breaks = "24 month", date_labels = "%Y") +
+    labs(
+        x="",
+        y="Número Índice",
+        title="Brasil: PIB com Ajuste Sazonal x Tendência Linear",
+        caption=foot_ibge
+    ) +
+    theme_minimal()
+)
+```
+
+## Variações do PIB
+
+```{python grafico_taxas_pib}
+# Filtra somente para o PIB
+taxas_pib_gf = (
+    taxas_pib.query("rubrica == 'PIB' & data >= '2012-01-01'")
+    .filter(
+        items = ["data", "Var. % margem", "Var. % interanual", "Var. % anual"],
+        axis = "columns"
+        )
+    .melt(id_vars = 'data')
+   )
+
+# Criando o gráfico
+(
+    ggplot(taxas_pib_gf, aes(x='data')) +
+    geom_col(aes(y='value', fill = 'tabela')) +
+    labs(x="", y="") +
+    facet_wrap('~tabela', nrow=2, scales = "free_y") +
+    scale_x_date(date_breaks = "12 month", date_labels = "%b/%Y") +
+    scale_colour_manual(values=list(colors.values())) +
+    scale_fill_manual(values=list(colors.values())) +
+    theme_minimal() +
+    theme(
+        figure_size=(14, 8),
+        legend_position="top",
+        axis_text_x=element_text(angle=45)
+    ) +
+    labs(title="PIB: Taxas de Variação",
+         caption = foot_ibge)
+)
+```
+
+
+## PIB e seus componentes 
+##### Variação Marginal
+
+```{python tbl_componentes_margem}
+
+# Cria função para auxiliar na criação da tabela
+def pivot_componentes(dados, variacao, n = 8):
+    resultado = (dados
+                  .assign(data=lambda x: pd.PeriodIndex(x['data'], freq="Q"))
+                  [["data", variacao, 'rubrica']]
+                  .pivot_table(index='data', columns='rubrica', values=variacao)
+                  .tail(n)
+                  .round(2)
+                  .style
+                  .format(precision=2, thousands=".", decimal=",")
+                  .background_gradient(cmap='RdYlGn_r', axis=0)
+                 )
+    return resultado
+
+
+# Cria tabela de variação marginal
+pivot_componentes(taxas_pib, "Var. % margem")
+```
+
+## PIB e seus componentes
+#### Variação Interanual
+
+```{python tbl_componentes_interanual}
+# Cria tabela de variação interanual
+pivot_componentes(taxas_pib, "Var. % interanual")
+```
+
+## PIB e seus componentes
+#### Variação Acumulada em 4 trimestres
+
+```{python tbl_componentes_anual}
+# Cria tabela de variação marginal
+pivot_componentes(taxas_pib, "Var. % anual")
+```
+
+## PMC, PMS, PIM-PF, IBC-br
+#### Variação na margem
+
+```{python funcao_pesquisas}
+def graf_pesquisas(dados, variavel, data='2022-01-01', titulo='', caption=''):
+    filtro = dados.query("variable == @variavel & data >= @data")
+    plot = (
+        ggplot(filtro, aes(x='data', y='valor', color='Pesquisa')) +
+        geom_line(size=1) +
+        scale_color_manual(values=list(colors.values())) +
+        scale_x_date(date_breaks="4 month", date_labels="%b/%Y") +
+        geom_hline(yintercept=0, color="black", linetype="dashed") +
+        theme_minimal() + 
+        theme(
+            legend_position="top",
+            plot_title=element_text(size=12, face="bold"),
+            axis_text_x=element_text(size=8, face="bold", angle=45),
+        ) +
+        labs(
+            x="",
+            y="",
+            title=titulo,
+            caption=caption
+        )
+    )
+    return plot
+
+```
+
+
+```{python pesquisas_margem}
+graf_pesquisas(pesquisas, "Var. % margem", titulo = "Termômetro do varejo, serviços e índustria: variação marginal (%)", caption = foot_ibge)
+```
+
+# PMC, PMS, PIM-PF: Variação interanual
+
+```{python pesquisas_interanual}
+graf_pesquisas(pesquisas, "Var. % interanual", data = "2019-01-01", titulo = "Termômetro do varejo, serviços e índustria: variação interanual (%)", caption = foot_ibge)
+```
+
+# PMC, PMS, PIM-PF: Variação acumulada em 12 meses
+
+```{python pesquisas_anual}
+graf_pesquisas(pesquisas, "Var. % acumulada em 12 meses", data = "2019-01-01", titulo = "Termômetro do varejo, serviços e índustria: variação Acumulada em 12 meses", caption = foot_ibge)
+```
+
+# Atividade Econômica por Setor
+
+```{python atividade_setor}
+
+# Realiza a filtragem dos valores
+filtro = pesquisas.query("variable == 'Número Índice S.A.' & data >= '2019-01-01'")
+
+# Defina a data de referência para a transformação de base 100
+data_referencia = '2019-01-01'
+
+# Realiza a transformação de base 100 para cada indicador usando groupby
+filtro['valor_base100'] = filtro.groupby('Pesquisa').apply(lambda x: (x['valor'] / x.loc[x['data'] == data_referencia, 'valor'].iloc[0]) * 100).reset_index(level=0, drop=True)
+
+
+# Cria o gráfico
+(
+    ggplot(filtro, aes(x='data', y='valor_base100', color='Pesquisa')) +
+    geom_line(size=1) +
+    scale_color_manual(values=list(colors.values())) +
+    scale_x_date(date_breaks="5 month", date_labels="%b/%Y") +
+    geom_hline(yintercept=100, color="black", linetype="dashed") +
+    theme_minimal() +
+    theme(
+        legend_position="top",
+        plot_title=element_text(size=12, face="bold"),
+        axis_text_x=element_text(size=8, face="bold", angle = 45),
+    ) +
+    labs(
+        x="",
+        y="",
+        title='Atividade Econômica por Setor',
+        subtitle= "Base 100 = jan/2019",
+        caption= "Fonte: analisemacro.com.br com dados do Sidra/IBGE e SGS/BCB"
+    )
+)
+```
+
+##
